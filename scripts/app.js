@@ -12,7 +12,7 @@ async function initApp() {
   // Register service worker
   if ('serviceWorker' in navigator) {
     try {
-      await navigator.serviceWorker.register('/service-worker.js');
+      await navigator.serviceWorker.register('./service-worker.js', { scope: './' });
       console.log('Service Worker registered');
     } catch (error) {
       console.error('Service Worker registration failed:', error);
