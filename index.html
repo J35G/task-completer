@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Task Completer - Your personal task manager with hydration tracking and AI insights">
+    <meta name="theme-color" content="#4f46e5">
+    <title>Task Completer</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="styles/style.css">
+    <link rel="icon" type="image/png" href="assets/icons/icon-192.png">
+</head>
+<body>
+    <div class="background-overlay"></div>
+    
+    <div class="app-container">
+        <!-- Top Bar -->
+        <header class="top-bar">
+            <div class="header-left">
+                <h1 class="app-title">Task Completer</h1>
+                <p class="greeting" id="greeting">Good morning!</p>
+                <div class="date-time-display">
+                    <span class="current-date" id="currentDate">Thursday, November 6, 2025</span>
+                    <span class="current-time" id="currentTime">03:24:15 PM</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="score-display">
+                    <span class="score-label">Score</span>
+                    <span class="score-value" id="totalScore">0</span>
+                </div>
+                <div class="streak-display">
+                    <span class="streak-icon">🔥</span>
+                    <span class="streak-value" id="streak">0</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-tab="tasks">Tasks</button>
+            <button class="nav-tab" data-tab="medications">Medications</button>
+            <button class="nav-tab" data-tab="duties">House Duties</button>
+            <button class="nav-tab" data-tab="hydration">Hydration</button>
+            <button class="nav-tab" data-tab="ai">AI Calculator</button>
+            <button class="nav-tab" data-tab="settings">Settings</button>
+        </nav>
+
+        <!-- Tasks Tab -->
+        <section id="tasks-tab" class="tab-content active">
+            <div class="task-header">
+                <h2>Today's Tasks</h2>
+                <button class="btn-primary" id="addTaskBtn">+ Add Task</button>
+            </div>
+            <div class="quick-filters">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="pending">Pending</button>
+                <button class="filter-btn" data-filter="completed">Completed</button>
+            </div>
+            <div class="task-list" id="taskList"></div>
+        </section>
+
+        <!-- Hydration Tab -->
+        <section id="hydration-tab" class="tab-content">
+            <div class="hydration-header">
+                <h2>Hydration Tracker</h2>
+                <div class="hydration-goal">
+                    <span>Daily Goal: </span>
+                    <input type="number" id="hydrationGoal" value="8" min="1" max="20">
+                    <span> cups</span>
+                </div>
+            </div>
+            <div class="hydration-progress">
+                <div class="progress-ring">
+                    <svg class="progress-circle" width="200" height="200">
+                        <circle class="progress-bg" cx="100" cy="100" r="90"></circle>
+                        <circle class="progress-fill" cx="100" cy="100" r="90" id="hydrationProgress"></circle>
+                    </svg>
+                    <div class="progress-text">
+                        <span id="hydrationCurrent">0</span>
+                        <span class="progress-label">/ <span id="hydrationGoalDisplay">8</span> cups</span>
+                    </div>
+                </div>
+            </div>
+            <div class="hydration-actions">
+                <button class="water-btn" data-amount="1">+1 Cup</button>
+                <button class="water-btn" data-amount="2">+2 Cups</button>
+                <button class="water-btn" data-amount="0.5">+0.5 Cup</button>
+            </div>
+            <div class="hydration-custom">
+                <div class="custom-hydration-input">
+                    <label for="customHydrationAmount">Custom Amount (cups):</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
+                        <input type="number" id="customHydrationAmount" min="0" step="0.1" placeholder="0.0" style="flex: 1; padding: 0.75rem; border: 2px solid var(--border-color); border-radius: 8px; font-size: 1rem;">
+                        <button class="btn-primary" id="addCustomHydrationBtn">Add</button>
+                    </div>
+                </div>
+                <button class="btn-secondary" id="resetHydrationBtn" style="margin-top: 1rem;">Reset Counter</button>
+            </div>
+            <div class="hydration-log" id="hydrationLog"></div>
+        </section>
+
+        <!-- AI Calculator Tab -->
+        <section id="ai-tab" class="tab-content">
+            <div class="ai-header">
+                <h2>Body Metrics Calculator</h2>
+                <p class="disclaimer">⚠️ This is an estimation tool, not medical advice. Consult healthcare professionals for accurate assessments.</p>
+            </div>
+            <div class="ai-calculator">
+                <div class="form-group">
+                    <label for="gender">Gender</label>
+                    <select id="gender">
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="age">Age</label>
+                    <input type="number" id="age" min="1" max="120" placeholder="Years">
+                </div>
+                <div class="form-group">
+                    <label for="height">Height</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
+                        <button class="btn-secondary" id="heightUnitBtn" style="padding: 0.5rem 1rem; font-size: 0.85rem;">CM</button>
+                        <span style="color: var(--text-secondary); font-size: 0.9rem;">or</span>
+                        <button class="btn-secondary" id="heightUnitBtnFt" style="padding: 0.5rem 1rem; font-size: 0.85rem;">FT/IN</button>
+                    </div>
+                    <div id="heightCmContainer">
+                        <input type="number" id="height" min="1" max="300" placeholder="cm">
+                    </div>
+                    <div id="heightFtContainer" style="display: none;">
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="number" id="heightFeet" min="0" max="8" placeholder="Feet" style="flex: 1;">
+                            <input type="number" id="heightInches" min="0" max="11" placeholder="Inches" style="flex: 1;">
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="weight">Weight</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
+                        <button class="btn-secondary" id="weightUnitBtnKg" style="padding: 0.5rem 1rem; font-size: 0.85rem;">KG</button>
+                        <span style="color: var(--text-secondary); font-size: 0.9rem;">or</span>
+                        <button class="btn-secondary" id="weightUnitBtnLbs" style="padding: 0.5rem 1rem; font-size: 0.85rem;">LBS</button>
+                    </div>
+                    <input type="number" id="weight" min="1" max="500" placeholder="kg">
+                </div>
+                <div class="form-group">
+                    <label for="waist">Waist Circumference</label>
+                    <input type="number" id="waist" min="1" max="200" placeholder="cm">
+                </div>
+                <div class="form-group">
+                    <label for="neck">Neck Circumference</label>
+                    <input type="number" id="neck" min="1" max="100" placeholder="cm">
+                </div>
+                <button class="btn-primary" id="calculateBtn">Calculate</button>
+                <div class="results" id="aiResults"></div>
+            </div>
+        </section>
+
+        <!-- Medications Tab -->
+        <section id="medications-tab" class="tab-content">
+            <div class="medications-header">
+                <h2>Medications & Vitamins</h2>
+                <button class="btn-primary" id="addMedicationBtn">+ Add Medication</button>
+            </div>
+            <div class="duties-filters">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="medication">Medication</button>
+                <button class="filter-btn" data-filter="vitamin">Vitamin</button>
+                <button class="filter-btn" data-filter="supplement">Supplement</button>
+            </div>
+            <div class="medications-list" id="medicationsList"></div>
+        </section>
+
+        <!-- House Duties Tab -->
+        <section id="duties-tab" class="tab-content">
+            <div class="duties-header">
+                <h2>House Duties</h2>
+                <button class="btn-primary" id="addDutyBtn">+ Add Duty</button>
+            </div>
+            <div class="duties-filters">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="cleaning">Cleaning</button>
+                <button class="filter-btn" data-filter="laundry">Laundry</button>
+                <button class="filter-btn" data-filter="shopping">Shopping</button>
+                <button class="filter-btn" data-filter="other">Other</button>
+            </div>
+            <div class="duties-list" id="dutiesList"></div>
+        </section>
+
+        <!-- Settings Tab -->
+        <section id="settings-tab" class="tab-content">
+            <div class="settings-header">
+                <h2>Settings</h2>
+            </div>
+            <div class="settings-content">
+                <div class="setting-group">
+                    <h3>Notifications</h3>
+                    <label class="switch">
+                        <input type="checkbox" id="notificationsEnabled" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <p>Enable task and hydration reminders</p>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>Medication Reminders</h3>
+                    <label class="switch">
+                        <input type="checkbox" id="medicationRemindersEnabled" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <p>Enable medication and vitamin reminders</p>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>Homepage Theme</h3>
+                    <select id="homepageTheme" style="padding: 0.75rem; border: 2px solid var(--border-color); border-radius: 8px; width: 100%; max-width: 300px; font-size: 1rem; font-weight: 500;">
+                        <option value="default">Default (Purple Gradient)</option>
+                        <option value="theme1">Theme 1 (Purple-Pink)</option>
+                        <option value="theme2">Theme 2 (Pink-Red)</option>
+                        <option value="theme3">Theme 3 (Blue-Cyan)</option>
+                        <option value="theme4">Theme 4 (Green-Turquoise)</option>
+                        <option value="theme5">Theme 5 (Pink-Yellow)</option>
+                        <option value="theme6">Theme 6 (Cyan-Purple)</option>
+                    </select>
+                    <p style="margin-top: 0.5rem;">Change the color theme of the homepage header</p>
+                    <div id="themeButtonsContainer" style="display: none; margin-top: 1rem; gap: 0.5rem; flex-wrap: wrap; flex-direction: row;">
+                        <button class="btn-secondary" id="previewThemeBtn">👁️ Preview</button>
+                        <button class="btn-primary" id="saveThemeBtn">💾 Save</button>
+                        <button class="btn-secondary" id="cancelThemeBtn">❌ Cancel</button>
+                    </div>
+                    <p id="themeStatusMessage" style="margin-top: 0.5rem; font-size: 0.9rem; font-weight: 600; color: var(--secondary-color); display: none;"></p>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>Custom Colors</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                        <div>
+                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Primary Color:</label>
+                            <input type="color" id="primaryColorPicker" value="#4f46e5" style="width: 100%; height: 50px; border: 2px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+                            <input type="text" id="primaryColorText" value="#4f46e5" style="width: 100%; margin-top: 0.5rem; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 8px; font-family: monospace;">
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Secondary Color:</label>
+                            <input type="color" id="secondaryColorPicker" value="#10b981" style="width: 100%; height: 50px; border: 2px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+                            <input type="text" id="secondaryColorText" value="#10b981" style="width: 100%; margin-top: 0.5rem; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 8px; font-family: monospace;">
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Text Color:</label>
+                            <input type="color" id="textColorPicker" value="#0f172a" style="width: 100%; height: 50px; border: 2px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+                            <input type="text" id="textColorText" value="#0f172a" style="width: 100%; margin-top: 0.5rem; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 8px; font-family: monospace;">
+                        </div>
+                    </div>
+                    <button class="btn-secondary" id="applyColorsBtn" style="margin-top: 1rem;">Apply Colors</button>
+                    <button class="btn-secondary" id="resetColorsBtn" style="margin-top: 0.5rem;">Reset to Default</button>
+                    <p style="margin-top: 0.5rem;">Customize your app's color scheme</p>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>Motivational Quotes</h3>
+                    <div id="quotesList" style="margin-bottom: 1rem;"></div>
+                    <button class="btn-secondary" id="addQuoteBtn">+ Add Quote</button>
+                    <button class="btn-secondary" id="toggleQuotesBtn" style="margin-left: 0.5rem;">Toggle Quotes Display</button>
+                    <div style="margin-top: 1rem;">
+                        <label class="switch">
+                            <input type="checkbox" id="quotesEnabled">
+                            <span class="slider"></span>
+                        </label>
+                        <span style="margin-left: 0.5rem;">Show quotes on page background</span>
+                    </div>
+                    <div style="margin-top: 0.5rem;">
+                        <label style="display: block; margin-bottom: 0.5rem;">Quote Display Mode:</label>
+                        <select id="quoteDisplayMode" style="padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 8px; width: 100%; max-width: 300px;">
+                            <option value="random">Random Quote</option>
+                            <option value="daily">Daily Quote</option>
+                            <option value="all">Show All (Rotation)</option>
+                        </select>
+                    </div>
+                    <p style="margin-top: 0.5rem;">Add motivational quotes to inspire you daily</p>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>Background Image</h3>
+                    <input type="file" id="backgroundImageInput" accept="image/*" style="display: none;">
+                    <div style="margin-bottom: 0.5rem;">
+                        <label style="display: block; margin-bottom: 0.5rem;">Apply to:</label>
+                        <select id="backgroundLocation" style="padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 8px; width: 100%; max-width: 300px;">
+                            <option value="page">Page Background</option>
+                            <option value="modal">Modal Background</option>
+                            <option value="both">Both</option>
+                        </select>
+                    </div>
+                    <button class="btn-secondary" id="uploadBackgroundBtn">Upload Background</button>
+                    <button class="btn-secondary" id="removeBackgroundBtn">Remove Background</button>
+                    <button class="btn-secondary" id="removeModalBackgroundBtn">Remove Modal Background</button>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>Data Management</h3>
+                    <button class="btn-secondary" id="exportDataBtn">Export Data</button>
+                    <button class="btn-secondary" id="importDataBtn">Import Data</button>
+                    <input type="file" id="importDataInput" accept=".json" style="display: none;">
+                    <button class="btn-danger" id="clearDataBtn">Clear All Data</button>
+                </div>
+                
+                <div class="setting-group">
+                    <h3>About</h3>
+                    <p>Task Completer v1.0.0</p>
+                    <p>Offline-first task manager with hydration tracking</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Task Modal -->
+    <div class="modal" id="taskModal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <h2 id="modalTitle">Add New Task</h2>
+            <form id="taskForm">
+                <input type="hidden" id="taskId">
+                <div class="form-group">
+                    <label for="taskType">Task Type</label>
+                    <select id="taskType">
+                        <option value="general">General</option>
+                        <option value="medication">Medication/Vitamin</option>
+                        <option value="house-duty">House Duty</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="taskTitle">Title *</label>
+                    <div class="title-input-wrapper">
+                        <input type="text" id="taskTitle" list="titleHistory" required autocomplete="off">
+                        <datalist id="titleHistory"></datalist>
+                        <button type="button" class="btn-icon" id="clearTitleHistoryBtn" title="Clear title history">🗑️</button>
+                    </div>
+                    <div id="titleSuggestions" class="title-suggestions"></div>
+                    <div id="titleHistoryList" class="title-history-list"></div>
+                </div>
+                <div class="form-group" id="medicationSelectionGroup" style="display: none;">
+                    <label for="medicationTypeFilter">Category</label>
+                    <select id="medicationTypeFilter">
+                        <option value="all">All</option>
+                        <option value="medication">Medication</option>
+                        <option value="vitamin">Vitamin</option>
+                        <option value="supplement">Supplement</option>
+                    </select>
+                    <label for="medicationSelect" style="margin-top: 1rem; display: block;">Select Medication/Vitamin</label>
+                    <select id="medicationSelect">
+                        <option value="">-- Select Medication --</option>
+                    </select>
+                    <button type="button" class="btn-secondary" id="manageMedicationsBtn" style="margin-top: 0.5rem;">Manage Medications</button>
+                </div>
+                <div class="form-group" id="houseDutySelectionGroup" style="display: none;">
+                    <label for="houseDutySelect">Select House Duty</label>
+                    <select id="houseDutySelect">
+                        <option value="">-- Select House Duty --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="taskNotes">Notes</label>
+                    <textarea id="taskNotes" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="taskDueDate">Due Date</label>
+                    <input type="date" id="taskDueDate">
+                    <div class="time-selection">
+                        <label style="margin-top: 0.5rem; display: block;">Time:</label>
+                        <div class="quick-time-buttons">
+                            <button type="button" class="btn-time" data-hours="9" data-minutes="0">9:00 AM</button>
+                            <button type="button" class="btn-time" data-hours="12" data-minutes="0">12:00 PM</button>
+                            <button type="button" class="btn-time" data-hours="15" data-minutes="0">3:00 PM</button>
+                            <button type="button" class="btn-time" data-hours="18" data-minutes="0">6:00 PM</button>
+                            <button type="button" class="btn-time" data-hours="21" data-minutes="0">9:00 PM</button>
+                        </div>
+                        <input type="time" id="taskDueTime" style="margin-top: 0.5rem;">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="taskRepeat">Repeat</label>
+                    <select id="taskRepeat">
+                        <option value="none">None</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="yearly">Yearly</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="taskPriority">Priority</label>
+                    <select id="taskPriority">
+                        <option value="daddy-chill">Daddy Chill</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="super-high">Super High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="taskScoreValue">Score Value</label>
+                    <input type="number" id="taskScoreValue" min="1" max="100" value="10">
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="taskShowCountdown">
+                        <span>Show Countdown Timer</span>
+                    </label>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancelTaskBtn">Cancel</button>
+                    <button type="button" class="btn-secondary" id="saveForLaterBtn">Save for Later</button>
+                    <button type="submit" class="btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Medication Modal -->
+    <div class="modal" id="medicationModal">
+        <div class="modal-content">
+            <span class="modal-close" id="closeMedicationModal">&times;</span>
+            <h2 id="medicationModalTitle">Add Medication/Vitamin</h2>
+            <form id="medicationForm">
+                <input type="hidden" id="medicationId">
+                <div class="form-group">
+                    <label for="medicationName">Name *</label>
+                    <input type="text" id="medicationName" required>
+                </div>
+                <div class="form-group">
+                    <label for="medicationType">Type</label>
+                    <select id="medicationType">
+                        <option value="medication">Medication</option>
+                        <option value="vitamin">Vitamin</option>
+                        <option value="supplement">Supplement</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="medicationDosage">Dosage</label>
+                    <input type="text" id="medicationDosage" placeholder="e.g., 1 tablet, 500mg">
+                </div>
+                <div class="form-group">
+                    <label for="medicationFrequency">Frequency</label>
+                    <select id="medicationFrequency">
+                        <option value="daily">Daily</option>
+                        <option value="twice-daily">Twice Daily</option>
+                        <option value="three-times-daily">Three Times Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="as-needed">As Needed</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Reminder Times</label>
+                    <div id="reminderTimesContainer"></div>
+                    <button type="button" class="btn-secondary" id="addReminderTimeBtn">+ Add Time</button>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancelMedicationBtn">Cancel</button>
+                    <button type="submit" class="btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Quote Modal -->
+    <div class="modal" id="quoteModal">
+        <div class="modal-content">
+            <span class="modal-close" id="closeQuoteModal">&times;</span>
+            <h2 id="quoteModalTitle">Add Motivational Quote</h2>
+            <form id="quoteForm">
+                <input type="hidden" id="quoteId">
+                <div class="form-group">
+                    <label for="quoteText">Quote *</label>
+                    <textarea id="quoteText" rows="4" required placeholder="Enter your motivational quote..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="quoteAuthor">Author (optional)</label>
+                    <input type="text" id="quoteAuthor" placeholder="e.g., Albert Einstein">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancelQuoteBtn">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Quote</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Clear Data Warning Modal -->
+    <div class="modal" id="clearDataWarningModal">
+        <div class="modal-content" style="max-width: 500px;">
+            <h2 style="color: var(--danger-color); margin-bottom: 1rem;">⚠️ Warning: Clear All Data</h2>
+            <div style="margin-bottom: 1.5rem;">
+                <p style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">This action will permanently delete ALL your data, including:</p>
+                <ul style="list-style: none; padding: 0; margin: 0 0 1rem 0;">
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">✅ All tasks (completed and pending)</li>
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">💧 All hydration records</li>
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">💊 All medications and vitamins</li>
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">🏠 All house duties</li>
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">⭐ Your score and streak</li>
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">🎨 All custom settings (colors, themes, quotes)</li>
+                    <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">🖼️ All background images</li>
+                </ul>
+                <p style="font-size: 1rem; color: var(--danger-color); font-weight: 700; margin-top: 1rem; padding: 1rem; background: rgba(239, 68, 68, 0.1); border-radius: 8px; border-left: 4px solid var(--danger-color);">
+                    ⚠️ This action CANNOT be undone! Make sure to export your data first if you want to keep a backup.
+                </p>
+            </div>
+            <div class="modal-actions" style="justify-content: space-between; gap: 1rem;">
+                <button type="button" class="btn-secondary" id="cancelClearDataBtn" style="flex: 1;">← Go Back</button>
+                <button type="button" class="btn-danger" id="confirmClearDataBtn" style="flex: 1;">Proceed →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- House Duty Modal -->
+    <div class="modal" id="dutyModal">
+        <div class="modal-content">
+            <span class="modal-close" id="closeDutyModal">&times;</span>
+            <h2 id="dutyModalTitle">Add House Duty</h2>
+            <form id="dutyForm">
+                <input type="hidden" id="dutyId">
+                <div class="form-group">
+                    <label for="dutyTitle">Title *</label>
+                    <input type="text" id="dutyTitle" required>
+                </div>
+                <div class="form-group">
+                    <label for="dutyCategory">Category</label>
+                    <select id="dutyCategory">
+                        <option value="Cleaning">Cleaning</option>
+                        <option value="Laundry">Laundry</option>
+                        <option value="Shopping">Shopping</option>
+                        <option value="Maintenance">Maintenance</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="dutyFrequency">Frequency</label>
+                    <select id="dutyFrequency">
+                        <option value="daily">Daily</option>
+                        <option value="biweekly">Bi-weekly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="as-needed">As Needed</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="dutyNotes">Notes</label>
+                    <textarea id="dutyNotes" rows="3"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancelDutyBtn">Cancel</button>
+                    <button type="submit" class="btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Load Dexie.js from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+    
+    <!-- App Scripts -->
+    <script src="scripts/db.js"></script>
+    <script src="scripts/notify.js"></script>
+    <script src="scripts/ai.js"></script>
+    <script src="scripts/medications.js"></script>
+    <script src="scripts/ui.js"></script>
+    <script src="scripts/app.js"></script>
+</body>
+</html>
+
