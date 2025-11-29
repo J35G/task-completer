@@ -1,55 +1,45 @@
-const CACHE_NAME = 'task-completer-v17';
+const CACHE_NAME = 'locallink-market-v1';
 const urlsToCache = [
   '/',
   '/index.html',
   '/styles/style.css',
-  '/scripts/app.js',
   '/scripts/db.js',
-  '/scripts/notify.js',
   '/scripts/ai.js',
+  '/scripts/notify.js',
   '/scripts/medications.js',
   '/scripts/ui.js',
+  '/scripts/app.js',
   '/manifest.json',
   'https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js'
 ];
 
-// Install event
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(urlsToCache))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(urlsToCache))
   );
 });
 
-// Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) =>
       Promise.all(
         cacheNames
-          .filter((cacheName) => cacheName !== CACHE_NAME)
-          .map((cacheName) => caches.delete(cacheName))
+          .filter((name) => name !== CACHE_NAME)
+          .map((name) => caches.delete(name))
       )
-    ).then(() => {
-      // Force clients to reload to get the new cache
-      return self.clients.claim();
-    })
+    ).then(() => self.clients.claim())
   );
 });
 
-// Fetch event
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => response || fetch(event.request))
+    caches.match(event.request).then((response) => response || fetch(event.request))
   );
 });
 
-// Notification click event
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  event.waitUntil(
-    clients.openWindow('/')
-  );
+  event.waitUntil(clients.openWindow('/'));
 });
-

@@ -1,454 +1,308 @@
-// Database setup using Dexie.js
-const db = new Dexie('TaskCompleterDB');
+const db = new Dexie('LocalLinkMarketDB');
 
-        db.version(1).stores({
-          tasks: '++id, title, notes, dueDateTime, repeats, priority, completed, completedAt, scoreValue, createdAt, showCountdown, taskType, medicationId',
-          userStats: '++id, totalScore, streak, completedToday, lastCompletedDate',
-          hydration: '++id, date, amount, timestamp',
-          settings: '++id, key, value',
-          taskTitleHistory: '++id, title, lastUsed',
-          medications: '++id, name, type, dosage, frequency, reminderTimes, isActive, createdAt',
-          houseDuties: '++id, title, category, frequency, lastCompleted, notes',
-          motivationalQuotes: '++id, quote, author, createdAt, enabled'
-        });
+// IndexedDB schema (auto-upgrades handled by Dexie)
+db.version(1).stores({
+  users: '++id, email, phone, city, trustScore',
+  listings: '++id, ownerId, deliveryScope, city, status',
+  transactions: '++id, listingId, buyerId, sellerId, status, deliveryType',
+  feedback: '++id, transactionId, reviewerId, revieweeId, rating, [transactionId+reviewerId]',
+  securityEvents: '++id, userId, type, status'
+});
 
-// Initialize default settings
-async function initializeSettings() {
-  const settings = await db.settings.toArray();
-  if (settings.length === 0) {
-    await db.settings.bulkAdd([
-      { key: 'notificationsEnabled', value: true },
-      { key: 'theme', value: 'default' },
-      { key: 'syncEnabled', value: false },
-      { key: 'backgroundImage', value: null },
-      { key: 'modalBackgroundImage', value: null },
-      { key: 'hydrationGoal', value: 8 },
-      { key: 'medicationRemindersEnabled', value: true },
-      { key: 'homepageTheme', value: 'default' },
-      { key: 'customPrimaryColor', value: '#4f46e5' },
-      { key: 'customSecondaryColor', value: '#10b981' },
-      { key: 'customTextColor', value: '#0f172a' },
-      { key: 'quotesEnabled', value: false },
-      { key: 'quoteDisplayMode', value: 'random' }
-    ]);
+const ACTIVE_USER_KEY = 'locallink-active-user';
+
+async function hashPassword(value) {
+  if (!value) return '';
+  const encoder = new TextEncoder();
+  const data = encoder.encode(value);
+  if (crypto?.subtle) {
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
   }
+  return btoa(value);
 }
 
-// Task operations
-const taskDB = {
-  async getAll() {
-    return await db.tasks.toArray();
-  },
-  
-  async getById(id) {
-    return await db.tasks.get(id);
-  },
-  
-  async add(task) {
-    // Save title to history
-    if (task.title) {
-      await titleHistoryDB.add(task.title);
+const authDB = {
+  async register(user) {
+    const normalizedEmail = user.email.trim().toLowerCase();
+    const existing = await db.users.where('email').equals(normalizedEmail).first();
+    if (existing) {
+      throw new Error('An account with this email already exists.');
     }
-    
-    return await db.tasks.add({
-      ...task,
-      completed: false,
-      showCountdown: task.showCountdown || false,
+
+    const passwordHash = user.passwordHash || (await hashPassword(user.password));
+    const newUser = {
+      fullName: user.fullName?.trim(),
+      email: normalizedEmail,
+      phone: user.phone?.trim() || '',
+      city: user.city?.trim() || 'Remote',
+      radius: Number(user.radius) || 10,
+      passwordHash,
+      trustScore: user.trustScore ?? 62,
+      points: user.points ?? 120,
+      level: user.level ?? 'Neighborhood Starter',
+      identityVerified: user.identityVerified ?? false,
+      twoFactorEnabled: user.twoFactorEnabled ?? false,
+      escrowReady: user.escrowReady ?? false,
+      linkedAccounts: user.linkedAccounts ?? [],
+      createdAt: new Date().toISOString()
+    };
+
+    return await db.users.add(newUser);
+  },
+
+  async login(email, password) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await db.users.where('email').equals(normalizedEmail).first();
+    if (!user) throw new Error('Account not found.');
+
+    const incomingHash = await hashPassword(password);
+    if (incomingHash !== user.passwordHash) {
+      throw new Error('Incorrect password.');
+    }
+
+    localStorage.setItem(ACTIVE_USER_KEY, user.id);
+    return user;
+  },
+
+  async logout() {
+    localStorage.removeItem(ACTIVE_USER_KEY);
+  },
+
+  async getActiveUser() {
+    const id = Number(localStorage.getItem(ACTIVE_USER_KEY));
+    if (!id) return null;
+    return await db.users.get(id);
+  },
+
+  async setActiveUser(id) {
+    localStorage.setItem(ACTIVE_USER_KEY, id);
+    return await db.users.get(id);
+  },
+
+  async updateUser(id, payload) {
+    await db.users.update(id, payload);
+    return await db.users.get(id);
+  },
+
+  async addLinkedAccount(id, provider) {
+    const user = await db.users.get(id);
+    if (!user) return null;
+    const existing = new Set(user.linkedAccounts || []);
+    existing.add(provider);
+    await db.users.update(id, { linkedAccounts: Array.from(existing) });
+    return await db.users.get(id);
+  }
+};
+
+const listingDB = {
+  async create(listing) {
+    return await db.listings.add({
+      ...listing,
+      status: listing.status || 'active',
+      createdAt: new Date().toISOString(),
+      heroTag: listing.heroTag || 'Verified seller'
+    });
+  },
+
+  async getAll() {
+    return await db.listings.orderBy('id').reverse().toArray();
+  },
+
+  async getByOwner(ownerId) {
+    return await db.listings.where('ownerId').equals(ownerId).toArray();
+  },
+
+  async updateStatus(id, status) {
+    await db.listings.update(id, { status });
+  }
+};
+
+const transactionDB = {
+  async create(listing, buyerId, deliveryType, options = {}) {
+    const record = {
+      listingId: listing.id,
+      buyerId,
+      sellerId: listing.ownerId,
+      deliveryType,
+      status: options.status || (deliveryType === 'local' ? 'awaiting-pickup' : 'in-transit'),
+      escrowEnabled: options.escrowEnabled ?? true,
+      pickupCode: options.pickupCode || null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    return await db.transactions.add(record);
+  },
+
+  async getForUser(userId) {
+    if (!userId) return [];
+    const buyer = await db.transactions.where('buyerId').equals(userId).toArray();
+    const seller = await db.transactions.where('sellerId').equals(userId).toArray();
+    const merged = [...buyer, ...seller];
+    return merged.sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+  },
+
+  async updateStatus(id, status) {
+    await db.transactions.update(id, { status, updatedAt: new Date().toISOString() });
+    return await db.transactions.get(id);
+  }
+};
+
+const feedbackDB = {
+  async add(feedback) {
+    return await db.feedback.add({
+      ...feedback,
       createdAt: new Date().toISOString()
     });
   },
-  
-  async update(id, updates) {
-    // Save title to history if it changed
-    if (updates.title) {
-      await titleHistoryDB.add(updates.title);
-    }
-    return await db.tasks.update(id, updates);
-  },
-  
-  async delete(id) {
-    return await db.tasks.delete(id);
-  },
-  
-  async getToday() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    return await db.tasks
-      .where('dueDateTime')
-      .between(today.toISOString(), tomorrow.toISOString(), true, false)
-      .toArray();
-  }
-};
 
-// User stats operations
-const statsDB = {
-  async get() {
-    let stats = await db.userStats.orderBy('id').reverse().first();
-    if (!stats) {
-      stats = {
-        totalScore: 0,
-        streak: 0,
-        completedToday: 0,
-        lastCompletedDate: null
-      };
-      await db.userStats.add(stats);
-      stats = await db.userStats.orderBy('id').reverse().first();
-    }
-    return stats;
+  async getForUser(userId) {
+    if (!userId) return [];
+    const given = await db.feedback.where('reviewerId').equals(userId).toArray();
+    const received = await db.feedback.where('revieweeId').equals(userId).toArray();
+    return { given, received };
   },
-  
-  async update(updates) {
-    const stats = await this.get();
-    if (stats.id) {
-      return await db.userStats.update(stats.id, updates);
-    }
-  },
-  
-  async addScore(points) {
-    const stats = await this.get();
-    const newScore = (stats.totalScore || 0) + points;
-    await this.update({ totalScore: newScore });
-    return newScore;
-  },
-  
-  async updateStreak() {
-    const stats = await this.get();
-    const today = new Date().toDateString();
-    const lastDate = stats.lastCompletedDate ? new Date(stats.lastCompletedDate).toDateString() : null;
-    
-    let newStreak = stats.streak || 0;
-    if (lastDate === today) {
-      // Already completed today
-      return newStreak;
-    } else if (lastDate === new Date(Date.now() - 86400000).toDateString()) {
-      // Completed yesterday, increment streak
-      newStreak = (stats.streak || 0) + 1;
-    } else if (lastDate !== today && lastDate !== null) {
-      // Missed a day, reset streak
-      newStreak = 1;
-    } else {
-      // First completion
-      newStreak = 1;
-    }
-    
-    await this.update({
-      streak: newStreak,
-      lastCompletedDate: today
-    });
-    return newStreak;
-  }
-};
 
-// Hydration operations
-const hydrationDB = {
-  async getToday() {
-    const today = new Date().toDateString();
-    const entries = await db.hydration.toArray();
-    return entries.filter(entry => new Date(entry.date).toDateString() === today);
-  },
-  
-  async add(amount) {
-    const today = new Date().toDateString();
-    return await db.hydration.add({
-      date: today,
-      amount: amount,
-      timestamp: new Date().toISOString()
-    });
-  },
-  
-  async getTotalToday() {
-    const entries = await this.getToday();
-    return entries.reduce((sum, entry) => sum + entry.amount, 0);
-  },
-  
-  async clearToday() {
-    const today = new Date().toDateString();
-    const entries = await this.getToday();
-    const ids = entries.map(entry => entry.id);
-    return await db.hydration.bulkDelete(ids);
-  }
-};
-
-// Settings operations
-const settingsDB = {
-  async get(key) {
-    const setting = await db.settings.where('key').equals(key).first();
-    return setting ? setting.value : null;
-  },
-  
-  async set(key, value) {
-    const existing = await db.settings.where('key').equals(key).first();
-    if (existing) {
-      return await db.settings.update(existing.id, { value });
-    } else {
-      return await db.settings.add({ key, value });
-    }
-  },
-  
-  async getAll() {
-    const settings = await db.settings.toArray();
-    const result = {};
-    settings.forEach(s => result[s.key] = s.value);
-    return result;
-  }
-};
-
-// Export/Import
-const exportData = async () => {
-  const data = {
-    tasks: await db.tasks.toArray(),
-    userStats: await statsDB.get(),
-    hydration: await db.hydration.toArray(),
-    settings: await settingsDB.getAll(),
-    motivationalQuotes: await db.motivationalQuotes.toArray(),
-    exportDate: new Date().toISOString()
-  };
-  return JSON.stringify(data, null, 2);
-};
-
-// Task Title History operations
-const titleHistoryDB = {
-  async add(title) {
-    if (!title || title.trim() === '') return;
-    const trimmedTitle = title.trim();
-    
-    // Check if title already exists
-    const existing = await db.taskTitleHistory.where('title').equals(trimmedTitle).first();
-    
-    if (existing) {
-      // Update last used time
-      await db.taskTitleHistory.update(existing.id, { lastUsed: new Date().toISOString() });
-    } else {
-      // Add new title
-      await db.taskTitleHistory.add({
-        title: trimmedTitle,
-        lastUsed: new Date().toISOString()
-      });
-    }
-  },
-  
-  async getAll() {
-    return await db.taskTitleHistory
-      .orderBy('lastUsed')
-      .reverse()
-      .limit(20)
-      .toArray();
-  },
-  
-  async delete(id) {
-    return await db.taskTitleHistory.delete(id);
-  },
-  
-  async clear() {
-    return await db.taskTitleHistory.clear();
-  },
-  
-  async deleteByTitle(title) {
-    return await db.taskTitleHistory.where('title').equals(title).delete();
-  }
-};
-
-const importData = async (jsonData) => {
-  try {
-    const data = JSON.parse(jsonData);
-    
-    if (data.tasks) {
-      await db.tasks.clear();
-      await db.tasks.bulkAdd(data.tasks);
-    }
-    
-    if (data.userStats) {
-      await db.userStats.clear();
-      await db.userStats.add(data.userStats);
-    }
-    
-    if (data.hydration) {
-      await db.hydration.clear();
-      await db.hydration.bulkAdd(data.hydration);
-    }
-    
-    if (data.settings) {
-      await db.settings.clear();
-      for (const [key, value] of Object.entries(data.settings)) {
-        await settingsDB.set(key, value);
+  async getPending(userId) {
+    if (!userId) return [];
+    const txns = await transactionDB.getForUser(userId);
+    const pending = [];
+    for (const txn of txns) {
+      if (!['delivered', 'completed'].includes(txn.status)) continue;
+      const alreadyLeft = await db.feedback
+        .where('[transactionId+reviewerId]')
+        .equals([txn.id, userId])
+        .first();
+      if (!alreadyLeft) {
+        const listing = await db.listings.get(txn.listingId);
+        pending.push({ txn, listing });
       }
     }
-    
-    if (data.motivationalQuotes) {
-      await db.motivationalQuotes.clear();
-      await db.motivationalQuotes.bulkAdd(data.motivationalQuotes);
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Import error:', error);
-    return false;
+    return pending;
   }
 };
 
-// Medication operations
-const medicationDB = {
-  async getAll() {
-    return await db.medications.where('isActive').equals(1).toArray();
-  },
-  
-  async getAllIncludingInactive() {
-    return await db.medications.toArray();
-  },
-  
-  async getById(id) {
-    return await db.medications.get(id);
-  },
-  
-  async add(medication) {
-    return await db.medications.add({
-      ...medication,
-      isActive: 1,
+const securityDB = {
+  async log(userId, type, status = 'pending', message = '') {
+    return await db.securityEvents.add({
+      userId,
+      type,
+      status,
+      message,
       createdAt: new Date().toISOString()
     });
   },
-  
-  async update(id, updates) {
-    return await db.medications.update(id, updates);
-  },
-  
-  async delete(id) {
-    return await db.medications.delete(id);
-  },
-  
-  async deactivate(id) {
-    return await db.medications.update(id, { isActive: 0 });
+
+  async getForUser(userId) {
+    if (!userId) return [];
+    return await db.securityEvents.where('userId').equals(userId).reverse().toArray();
   }
 };
 
-// House Duties operations
-const houseDutiesDB = {
-  async getAll() {
-    return await db.houseDuties.toArray();
-  },
-  
-  async getById(id) {
-    return await db.houseDuties.get(id);
-  },
-  
-  async add(duty) {
-    return await db.houseDuties.add({
-      ...duty,
-      lastCompleted: null,
-      createdAt: new Date().toISOString()
-    });
-  },
-  
-  async update(id, updates) {
-    return await db.houseDuties.update(id, updates);
-  },
-  
-  async delete(id) {
-    return await db.houseDuties.delete(id);
-  },
-  
-  async markCompleted(id) {
-    return await db.houseDuties.update(id, { lastCompleted: new Date().toISOString() });
-  }
-};
+async function seedDemoData() {
+  const userCount = await db.users.count();
+  if (userCount > 0) return;
 
-// Motivational Quotes operations
-const quotesDB = {
-  async getAll() {
-    return await db.motivationalQuotes.where('enabled').equals(1).toArray();
-  },
-  
-  async getAllIncludingDisabled() {
-    return await db.motivationalQuotes.toArray();
-  },
-  
-  async getById(id) {
-    return await db.motivationalQuotes.get(id);
-  },
-  
-  async add(quoteData) {
-    return await db.motivationalQuotes.add({
-      ...quoteData,
-      enabled: 1,
-      createdAt: new Date().toISOString()
-    });
-  },
-  
-  async update(id, updates) {
-    return await db.motivationalQuotes.update(id, updates);
-  },
-  
-  async delete(id) {
-    return await db.motivationalQuotes.delete(id);
-  },
-  
-  async toggleEnabled(id, enabled) {
-    return await db.motivationalQuotes.update(id, { enabled: enabled ? 1 : 0 });
-  },
-  
-  async getRandom() {
-    const quotes = await this.getAll();
-    if (quotes.length === 0) return null;
-    return quotes[Math.floor(Math.random() * quotes.length)];
-  },
-  
-  async getDaily() {
-    const quotes = await this.getAll();
-    if (quotes.length === 0) return null;
-    const dayOfYear = Math.floor((new Date() - new Date(new Date().getFullYear(), 0, 0)) / 1000 / 60 / 60 / 24);
-    return quotes[dayOfYear % quotes.length];
-  }
-};
+  const demoHash = await hashPassword('demo1234');
 
-// Initialize default medications and house duties
-async function initializeMedicationsAndDuties() {
-  // Check if medications exist
-  const meds = await db.medications.count();
-  if (meds === 0) {
-    // Add some default medications/vitamins
-    await db.medications.bulkAdd([
-      { name: 'Multivitamin', type: 'vitamin', dosage: '1 tablet', frequency: 'daily', reminderTimes: ['09:00'], isActive: 1, createdAt: new Date().toISOString() },
-      { name: 'Vitamin D', type: 'vitamin', dosage: '1000 IU', frequency: 'daily', reminderTimes: ['09:00'], isActive: 1, createdAt: new Date().toISOString() },
-      { name: 'Calcium', type: 'vitamin', dosage: '500 mg', frequency: 'daily', reminderTimes: ['20:00'], isActive: 1, createdAt: new Date().toISOString() }
-    ]);
-  }
-  
-  // Check if house duties exist
-  const duties = await db.houseDuties.count();
-  if (duties === 0) {
-    // Add some default house duties
-    await db.houseDuties.bulkAdd([
-      { title: 'Take out trash', category: 'Cleaning', frequency: 'weekly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Vacuum floors', category: 'Cleaning', frequency: 'weekly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Clean bathroom', category: 'Cleaning', frequency: 'weekly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Do laundry', category: 'Laundry', frequency: 'weekly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Grocery shopping', category: 'Shopping', frequency: 'weekly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Dust furniture', category: 'Cleaning', frequency: 'monthly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Change bed sheets', category: 'Cleaning', frequency: 'biweekly', lastCompleted: null, notes: '', createdAt: new Date().toISOString() },
-      { title: 'Clean kitchen', category: 'Cleaning', frequency: 'daily', lastCompleted: null, notes: '', createdAt: new Date().toISOString() }
-    ]);
-  }
+  const demoSellerId = await db.users.add({
+    fullName: 'Harper Lane',
+    email: 'demo@locallink.app',
+    phone: '+1 555-284-1199',
+    city: 'Austin, TX',
+    radius: 15,
+    passwordHash: demoHash,
+    trustScore: 86,
+    points: 640,
+    level: 'Trusted Power Seller',
+    identityVerified: true,
+    twoFactorEnabled: true,
+    escrowReady: true,
+    linkedAccounts: ['PayPal', 'Google Pay'],
+    createdAt: new Date().toISOString()
+  });
+
+  const buyerId = await db.users.add({
+    fullName: 'Mason Riley',
+    email: 'buyer@locallink.app',
+    phone: '+1 555-820-4411',
+    city: 'Austin, TX',
+    radius: 8,
+    passwordHash: await hashPassword('buyertest'),
+    trustScore: 74,
+    points: 320,
+    level: 'Neighborhood Scout',
+    identityVerified: true,
+    twoFactorEnabled: false,
+    escrowReady: true,
+    linkedAccounts: ['Cash App'],
+    createdAt: new Date().toISOString()
+  });
+
+  const hybridListingId = await listingDB.create({
+    ownerId: demoSellerId,
+    title: 'Refurb Galaxy Buds2 Pro',
+    description: 'White • noise-canceling • includes travel case',
+    category: 'Electronics',
+    condition: 'Excellent',
+    price: 90,
+    deliveryScope: 'hybrid',
+    city: 'Austin, TX',
+    radius: 10,
+    shippingOptions: 'USPS Priority',
+    heroTag: 'Pickup today or ship in 12h'
+  });
+
+  const onlineListingId = await listingDB.create({
+    ownerId: demoSellerId,
+    title: 'Handmade Macrame Wall Art',
+    description: '36" wide neutral tones, includes mounting kit',
+    category: 'Home & Decor',
+    condition: 'New',
+    price: 120,
+    deliveryScope: 'online',
+    city: 'Austin, TX',
+    radius: 0,
+    shippingOptions: 'UPS Ground',
+    heroTag: 'Ships within 24h'
+  });
+
+  await listingDB.create({
+    ownerId: buyerId,
+    title: 'IKEA Linnmon desk (local only)',
+    description: '47" white desk with adjustable legs. Minor scuffs.',
+    category: 'Furniture',
+    condition: 'Good',
+    price: 45,
+    deliveryScope: 'local',
+    city: 'Austin, TX',
+    radius: 5,
+    shippingOptions: 'Pickup only',
+    heroTag: 'Ground floor pickup'
+  });
+
+  const txnId = await transactionDB.create(
+    { id: hybridListingId, ownerId: demoSellerId },
+    buyerId,
+    'local',
+    { status: 'delivered', pickupCode: '417920' }
+  );
+
+  await feedbackDB.add({
+    transactionId: txnId,
+    reviewerId: buyerId,
+    revieweeId: demoSellerId,
+    rating: 5,
+    comment: 'Smooth pickup, product as described.',
+    tags: ['fast-response', 'verified'],
+    createdAt: new Date().toISOString()
+  });
+
+  await securityDB.log(demoSellerId, 'id-check', 'approved', 'Government ID verified at signup.');
+  await securityDB.log(demoSellerId, 'two-factor', 'approved', 'Authenticator app linked.');
+  await securityDB.log(buyerId, 'escrow', 'approved', 'Escrow wallet connected.');
 }
 
-// Initialize on load
-initializeSettings();
-
-// Initialize default motivational quotes
-async function initializeQuotes() {
-  const quotes = await db.motivationalQuotes.toArray();
-  if (quotes.length === 0) {
-    await db.motivationalQuotes.bulkAdd([
-      { quote: 'The way to get started is to quit talking and begin doing.', author: 'Walt Disney', enabled: 1, createdAt: new Date().toISOString() },
-      { quote: 'Innovation distinguishes between a leader and a follower.', author: 'Steve Jobs', enabled: 1, createdAt: new Date().toISOString() },
-      { quote: 'The future belongs to those who believe in the beauty of their dreams.', author: 'Eleanor Roosevelt', enabled: 1, createdAt: new Date().toISOString() },
-      { quote: 'It is during our darkest moments that we must focus to see the light.', author: 'Aristotle', enabled: 1, createdAt: new Date().toISOString() },
-      { quote: 'Success is not final, failure is not fatal: it is the courage to continue that counts.', author: 'Winston Churchill', enabled: 1, createdAt: new Date().toISOString() }
-    ]);
-  }
-}
-initializeQuotes();
-initializeMedicationsAndDuties();
-
+window.marketplaceSeedReady = seedDemoData();
