@@ -1,12 +1,12 @@
 {
-  "name": "Task Completer",
-  "short_name": "TaskCompleter",
-  "description": "Your personal task manager with hydration tracking and AI insights",
+  "name": "LocalLink Market",
+  "short_name": "LocalLink",
+  "description": "Trusted marketplace for listing local pickups, online shipments, or both with escrow, ID verification, and loyalty rewards.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#4f46e5",
+  "background_color": "#05060a",
+  "theme_color": "#8c5ff8",
   "orientation": "portrait-primary",
   "icons": [
     {
@@ -22,16 +22,22 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["productivity", "health"],
+  "categories": ["shopping", "finance", "productivity"],
   "screenshots": [],
   "shortcuts": [
     {
-      "name": "Add Task",
-      "short_name": "Add",
-      "description": "Quickly add a new task",
-      "url": "/?action=add-task",
+      "name": "List an item",
+      "short_name": "List",
+      "description": "Jump straight to the listing composer",
+      "url": "/?action=list-item",
+      "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Local deals",
+      "short_name": "Local",
+      "description": "Show items available for pickup nearby",
+      "url": "/?view=local",
       "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }
-

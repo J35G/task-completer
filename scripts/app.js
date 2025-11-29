@@ -1,494 +1,328 @@
-// Main application logic
+const MarketplaceApp = (() => {
+  const state = {
+    listings: [],
+    transactions: [],
+    pendingFeedback: [],
+    securityEvents: [],
+    usersMap: {}
+  };
 
-// Update stats display
-async function updateStats() {
-  const stats = await statsDB.get();
-  document.getElementById('totalScore').textContent = stats.totalScore || 0;
-  document.getElementById('streak').textContent = stats.streak || 0;
-}
+  let activeUser = null;
+  let currentFilter = 'all';
+  let searchQuery = '';
 
-// Initialize app
-async function initApp() {
-  // Register service worker
-  if ('serviceWorker' in navigator) {
+  const qs = (id) => document.getElementById(id);
+
+  const init = async () => {
+    if (window.marketplaceSeedReady) {
+      try {
+        await window.marketplaceSeedReady;
+      } catch (error) {
+        console.warn('Seed failed', error);
+      }
+    }
+    activeUser = await authDB.getActiveUser();
+    UI.toggleAuthPanels(!!activeUser);
+    await refresh();
+    bindEvents();
+    Notifier.requestPermission();
+    navigator.serviceWorker?.register('service-worker.js').catch(console.warn);
+  };
+
+  const bindEvents = () => {
+    qs('signupForm').addEventListener('submit', handleSignup);
+    qs('signinForm').addEventListener('submit', handleSignin);
+    qs('logoutBtn').addEventListener('click', handleLogout);
+    qs('linkAccountBtn').addEventListener('click', handleLinkAccount);
+    qs('listItemForm').addEventListener('submit', handleListingSubmit);
+    qs('listingGrid').addEventListener('click', handleListingAction);
+    qs('feedbackList').addEventListener('click', handleFeedbackSubmit);
+    qs('marketFilters').addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-filter]');
+      if (!btn) return;
+      currentFilter = btn.dataset.filter;
+      document.querySelectorAll('#marketFilters [data-filter]').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderListings();
+    });
+    qs('searchListings').addEventListener('input', (event) => {
+      searchQuery = event.target.value.toLowerCase();
+      renderListings();
+    });
+
+    qs('scopeSelector').addEventListener('click', (event) => {
+      const pill = event.target.closest('[data-scope]');
+      if (!pill) return;
+      document.querySelectorAll('#scopeSelector [data-scope]').forEach((p) => p.classList.remove('active'));
+      pill.classList.add('active');
+      qs('listingScope').value = pill.dataset.scope;
+    });
+
+    qs('twoFactorToggle').addEventListener('change', (e) => handleSecurityToggle('twoFactorEnabled', e.target.checked));
+    qs('escrowToggle').addEventListener('change', (e) => handleSecurityToggle('escrowReady', e.target.checked));
+    qs('verifyIdentityBtn').addEventListener('click', handleVerifyIdentity);
+    qs('generatePickupCodeBtn').addEventListener('click', handlePickupCode);
+    qs('requestEscrowBtn').addEventListener('click', handleEscrowRequest);
+  };
+
+  const refresh = async () => {
+    state.listings = await listingDB.getAll();
+    const users = await db.users.toArray();
+    state.usersMap = Object.fromEntries(users.map((user) => [user.id, user]));
+
+    if (activeUser) {
+      state.transactions = await transactionDB.getForUser(activeUser.id);
+      state.pendingFeedback = await feedbackDB.getPending(activeUser.id);
+      state.securityEvents = await securityDB.getForUser(activeUser.id);
+      const feedbackStats = await feedbackDB.getForUser(activeUser.id);
+      const summary = ReputationEngine.summarizeFeedback(feedbackStats.received);
+      UI.renderAccountSummary(activeUser, summary);
+      UI.renderFeedbackRequests(state.pendingFeedback);
+      UI.renderSecurityEvents(state.securityEvents);
+    } else {
+      state.transactions = [];
+      state.pendingFeedback = [];
+      state.securityEvents = [];
+      UI.renderFeedbackRequests([]);
+      UI.renderSecurityEvents([]);
+    }
+
+    renderListings();
+    const listingMap = Object.fromEntries(state.listings.map((listing) => [listing.id, listing]));
+    UI.renderActivity(state.transactions, listingMap, state.usersMap);
+  };
+
+  const renderListings = () => {
+    const filtered = state.listings.filter((listing) => {
+      if (currentFilter !== 'all' && listing.deliveryScope !== currentFilter) return false;
+      if (searchQuery) {
+        const blob = `${listing.title} ${listing.description} ${listing.city}`.toLowerCase();
+        if (!blob.includes(searchQuery)) return false;
+      }
+      if (currentFilter === 'local' && activeUser) {
+        return listing.city === activeUser.city || listing.radius <= activeUser.radius;
+      }
+      return true;
+    });
+    UI.renderListings(filtered, activeUser);
+  };
+
+  const handleSignup = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const payload = {
+      fullName: form.fullName.value,
+      email: form.email.value,
+      phone: form.phone.value,
+      city: form.city.value,
+      radius: form.radius.value,
+      password: form.password.value,
+      linkedAccounts: [],
+      identityVerified: false
+    };
+    const provider = form.linkAccount.value;
+
+    if (!payload.fullName || !payload.email || !payload.password) {
+      return Notifier.toast('Name, email, and password are required.', 'error');
+    }
+
     try {
-      await navigator.serviceWorker.register('./service-worker.js', { scope: './' });
-      console.log('Service Worker registered');
+      const id = await authDB.register(payload);
+      activeUser = await authDB.setActiveUser(id);
+      if (provider && provider !== 'none') {
+        activeUser = await authDB.addLinkedAccount(activeUser.id, provider);
+        await securityDB.log(activeUser.id, 'link-account', 'approved', `${provider} linked during signup.`);
+      }
+      const awards = ReputationEngine.award('ACCOUNT_CREATED', activeUser);
+      activeUser = await authDB.updateUser(activeUser.id, awards);
+      UI.toggleAuthPanels(true);
+      Notifier.toast('Account created. You are signed in!', 'success');
+      await refresh();
+      form.reset();
     } catch (error) {
-      console.error('Service Worker registration failed:', error);
+      Notifier.toast(error.message || 'Unable to create account.', 'error');
     }
-  }
-  
-  // Initialize UI
-  initUI();
-  
-  // Load initial data
-  await renderTasks();
-  if (typeof renderMedications === 'function') {
-    await renderMedications();
-  }
-  if (typeof renderHouseDuties === 'function') {
-    await renderHouseDuties();
-  }
-  await renderHydration();
-  await renderSettings();
-  await updateStats();
-  await updateQuoteDisplay(); // Display quotes on load
-  
-  // Load dropdowns
-  if (typeof loadMedicationDropdown === 'function') {
-    await loadMedicationDropdown();
-  }
-  if (typeof loadHouseDutyDropdown === 'function') {
-    await loadHouseDutyDropdown();
-  }
-  
-  // Check medication reminders and create daily tasks
-  if (typeof checkMedicationReminders === 'function') {
-    await checkMedicationReminders();
-  }
-  
-  // Set up hydration buttons using event delegation on hydration actions container
-  const hydrationActions = document.querySelector('.hydration-actions');
-  if (hydrationActions) {
-    hydrationActions.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.water-btn');
-      if (btn) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const amount = parseFloat(btn.dataset.amount);
-        
-        if (isNaN(amount) || amount <= 0) {
-          console.error('Invalid hydration amount:', btn.dataset.amount);
-          return;
-        }
-        
-        try {
-          await hydrationDB.add(amount);
-          await renderHydration();
-          if (typeof showNotification === 'function') {
-            await showNotification('💧 Water Added', {
-              body: `Added ${amount} cup(s). Keep it up!`,
-              tag: 'water-added'
-            });
-          }
-        } catch (error) {
-          console.error('Error adding hydration:', error);
-          alert('Error adding hydration. Please try again.');
-        }
-      }
+  };
+
+  const handleSignin = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    try {
+      activeUser = await authDB.login(form.email.value, form.password.value);
+      UI.toggleAuthPanels(true);
+      Notifier.toast('Welcome back!', 'success');
+      await refresh();
+      form.reset();
+    } catch (error) {
+      Notifier.toast(error.message || 'Unable to sign in.', 'error');
+    }
+  };
+
+  const handleLogout = async () => {
+    await authDB.logout();
+    activeUser = null;
+    UI.toggleAuthPanels(false);
+    Notifier.toast('Signed out.', 'info');
+    await refresh();
+  };
+
+  const handleLinkAccount = async () => {
+    if (!activeUser) return Notifier.toast('Sign in to link accounts.', 'error');
+    const provider = qs('linkAccountSelect').value;
+    if (provider === 'none') return;
+    activeUser = await authDB.addLinkedAccount(activeUser.id, provider);
+    await securityDB.log(activeUser.id, 'link-account', 'approved', `${provider} connected.`);
+    const awards = ReputationEngine.award('SECURITY_UPGRADE', activeUser, { extraPoints: 10 });
+    activeUser = await authDB.updateUser(activeUser.id, awards);
+    Notifier.toast(`${provider} linked!`, 'success');
+    await refresh();
+  };
+
+  const handleListingSubmit = async (event) => {
+    event.preventDefault();
+    if (!activeUser) return Notifier.toast('Create an account to list items.', 'error');
+
+    const form = event.target;
+    const scope = qs('listingScope').value;
+    const listing = {
+      ownerId: activeUser.id,
+      title: form.title.value,
+      description: form.description.value,
+      category: form.category.value,
+      condition: form.condition.value,
+      price: Number(form.price.value || 0),
+      deliveryScope: scope,
+      city: form.city.value || activeUser.city,
+      radius: Number(form.radius.value || activeUser.radius || 5),
+      shippingOptions: form.shipping.value || 'UPS Ground',
+      heroTag: scope === 'local' ? 'Ready for pickup today' : scope === 'online' ? 'Ships in 24h' : 'Pickup or ship within 12h'
+    };
+
+    if (!listing.title || !listing.price) {
+      return Notifier.toast('Title and price are required.', 'error');
+    }
+
+    await listingDB.create(listing);
+    const awards = ReputationEngine.award('LISTING_CREATED', activeUser);
+    activeUser = await authDB.updateUser(activeUser.id, awards);
+    Notifier.toast('Listing published!', 'success');
+    form.reset();
+    document.querySelectorAll('#scopeSelector [data-scope]').forEach((p, idx) => p.classList.toggle('active', idx === 0));
+    qs('listingScope').value = 'local';
+    await refresh();
+  };
+
+  const handleListingAction = async (event) => {
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+    if (!activeUser) return Notifier.toast('Sign in to continue.', 'error');
+
+    const listingId = Number(button.dataset.id);
+    const listing = state.listings.find((item) => item.id === listingId);
+    if (!listing) return;
+    if (listing.ownerId === activeUser.id) return Notifier.toast('This is your listing.', 'info');
+
+    const mode = button.dataset.action;
+    const pickupCode = mode === 'local' ? Logistics.createPickupCode() : null;
+    const txnId = await transactionDB.create(listing, activeUser.id, mode, {
+      pickupCode,
+      escrowEnabled: qs('escrowToggle').checked
     });
-  }
-  
-  // Also set up direct listeners as fallback
-  setTimeout(() => {
-    document.querySelectorAll('.water-btn').forEach(btn => {
-      // Remove any existing listeners by cloning
-      const newBtn = btn.cloneNode(true);
-      btn.parentNode.replaceChild(newBtn, btn);
-      
-      // Add fresh listener
-      newBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const amount = parseFloat(newBtn.dataset.amount);
-        
-        if (isNaN(amount) || amount <= 0) {
-          console.error('Invalid hydration amount:', newBtn.dataset.amount);
-          return;
-        }
-        
-        try {
-          await hydrationDB.add(amount);
-          await renderHydration();
-          if (typeof showNotification === 'function') {
-            await showNotification('💧 Water Added', {
-              body: `Added ${amount} cup(s). Keep it up!`,
-              tag: 'water-added'
-            });
-          }
-        } catch (error) {
-          console.error('Error adding hydration:', error);
-          alert('Error adding hydration. Please try again.');
-        }
+
+    const seller = state.usersMap[listing.ownerId] || (await db.users.get(listing.ownerId));
+    const buyerAwards = ReputationEngine.award(mode === 'local' ? 'LOCAL_TRADE' : 'ONLINE_TRADE', activeUser, {
+      escrow: qs('escrowToggle').checked
+    });
+    activeUser = await authDB.updateUser(activeUser.id, buyerAwards);
+
+    if (seller) {
+      const sellerAwards = ReputationEngine.award(mode === 'local' ? 'LOCAL_TRADE' : 'ONLINE_TRADE', seller, { extraPoints: 8 });
+      await authDB.updateUser(seller.id, sellerAwards);
+    }
+
+    await securityDB.log(activeUser.id, 'trade', 'logged', `Transaction #${txnId} created (${mode}).`);
+    Notifier.toast('Trade started! Check the secure trade center.', 'success');
+    if (pickupCode) {
+      Notifier.toast(`Pickup PIN: ${pickupCode}`, 'info');
+    }
+    Notifier.push('Trade started', `${listing.title} (${mode === 'local' ? 'Local pickup' : 'Ship to you'})`);
+    await refresh();
+  };
+
+  const handleFeedbackSubmit = async (event) => {
+    const button = event.target.closest('[data-feedback-submit]');
+    if (!button) return;
+    if (!activeUser) return;
+
+    const txnId = Number(button.dataset.feedbackSubmit);
+    const rating = Number(document.querySelector(`[data-feedback-rating="${txnId}"]`).value);
+    const comment = document.querySelector(`[data-feedback-notes="${txnId}"]`).value;
+    const txn = state.pendingFeedback.find((item) => item.txn.id === txnId);
+    if (!txn) return;
+
+    const revieweeId = txn.txn.buyerId === activeUser.id ? txn.txn.sellerId : txn.txn.buyerId;
+    await feedbackDB.add({
+      transactionId: txnId,
+      reviewerId: activeUser.id,
+      revieweeId,
+      rating,
+      comment,
+      tags: rating >= 4 ? ['positive'] : ['needs-attention']
+    });
+
+    const awards = ReputationEngine.award('FEEDBACK_LEFT', activeUser, { rating });
+    activeUser = await authDB.updateUser(activeUser.id, awards);
+    Notifier.toast('Feedback submitted!', 'success');
+    await refresh();
+  };
+
+  const handleSecurityToggle = async (field, value) => {
+    if (!activeUser) return;
+    activeUser = await authDB.updateUser(activeUser.id, { [field]: value });
+    await securityDB.log(
+      activeUser.id,
+      field,
+      value ? 'approved' : 'disabled',
+      value ? `${field} enabled.` : `${field} disabled.`
+    );
+    if (value) {
+      const awards = ReputationEngine.award('SECURITY_UPGRADE', activeUser, {
+        identityVerified: field === 'identityVerified',
+        twoFactor: field === 'twoFactorEnabled',
+        escrow: field === 'escrowReady'
       });
-    });
-  }, 100);
-  
-  // Custom hydration input
-  const addCustomHydrationBtn = document.getElementById('addCustomHydrationBtn');
-  if (addCustomHydrationBtn) {
-    addCustomHydrationBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      const input = document.getElementById('customHydrationAmount');
-      const amount = parseFloat(input.value);
-      
-      if (isNaN(amount) || amount <= 0) {
-        alert('Please enter a valid amount greater than 0');
-        return;
-      }
-      
-      try {
-        await hydrationDB.add(amount);
-        input.value = '';
-        await renderHydration();
-        if (typeof showNotification === 'function') {
-          await showNotification('💧 Water Added', {
-            body: `Added ${amount} cup(s). Keep it up!`,
-            tag: 'water-added'
-          });
-        }
-      } catch (error) {
-        console.error('Error adding hydration:', error);
-        alert('Error adding hydration. Please try again.');
-      }
-    });
-  }
-  
-  // Allow Enter key to submit custom hydration
-  const customHydrationInput = document.getElementById('customHydrationAmount');
-  if (customHydrationInput) {
-    customHydrationInput.addEventListener('keypress', async (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        const addBtn = document.getElementById('addCustomHydrationBtn');
-        if (addBtn) {
-          addBtn.click();
-        }
-      }
-    });
-  }
-  
-  // Reset hydration counter
-  const resetHydrationBtn = document.getElementById('resetHydrationBtn');
-  if (resetHydrationBtn) {
-    resetHydrationBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      if (confirm('Are you sure you want to reset today\'s hydration counter? This cannot be undone.')) {
-        try {
-          await hydrationDB.clearToday();
-          await renderHydration();
-          if (typeof showNotification === 'function') {
-            await showNotification('💧 Counter Reset', {
-              body: 'Today\'s hydration counter has been reset.',
-              tag: 'hydration-reset'
-            });
-          }
-        } catch (error) {
-          console.error('Error resetting hydration:', error);
-          alert('Error resetting hydration. Please try again.');
-        }
-      }
-    });
-  }
-  
-  // Initialize AI Calculator
-  await initAICalculator();
-  
-  // Check reminders periodically
-  checkReminders();
-  setInterval(checkReminders, 60000); // Check every minute
-  
-  // Check medication reminders daily at midnight
-  if (typeof checkMedicationReminders === 'function') {
-    const now = new Date();
-    const midnight = new Date();
-    midnight.setHours(24, 0, 0, 0);
-    const msUntilMidnight = midnight - now;
-    setTimeout(() => {
-      if (typeof checkMedicationReminders === 'function') {
-        checkMedicationReminders();
-        setInterval(checkMedicationReminders, 86400000); // Every 24 hours
-      }
-    }, msUntilMidnight);
-  }
-  
-  // Update stats periodically
-  setInterval(updateStats, 5000);
-}
-
-// AI Calculator unit conversion functions
-function convertHeightToCm(feet, inches) {
-  return (feet * 30.48) + (inches * 2.54);
-}
-
-function convertCmToFeetInches(cm) {
-  const totalInches = cm / 2.54;
-  const feet = Math.floor(totalInches / 12);
-  const inches = Math.round(totalInches % 12);
-  return { feet, inches };
-}
-
-function convertKgToLbs(kg) {
-  return kg * 2.20462;
-}
-
-function convertLbsToKg(lbs) {
-  return lbs / 2.20462;
-}
-
-// AI Calculator state
-let aiCalculatorState = {
-  heightUnit: 'cm',
-  weightUnit: 'kg'
-};
-
-// Initialize AI Calculator
-async function initAICalculator() {
-  try {
-    // Wait a bit to ensure DOM is ready
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Get DOM elements
-    const heightCmContainer = document.getElementById('heightCmContainer');
-    const heightFtContainer = document.getElementById('heightFtContainer');
-    const heightUnitBtn = document.getElementById('heightUnitBtn');
-    const heightUnitBtnFt = document.getElementById('heightUnitBtnFt');
-    const weightUnitBtnKg = document.getElementById('weightUnitBtnKg');
-    const weightUnitBtnLbs = document.getElementById('weightUnitBtnLbs');
-    const calculateBtn = document.getElementById('calculateBtn');
-    
-    // Check if elements exist
-    if (!heightCmContainer || !heightFtContainer || !heightUnitBtn || !heightUnitBtnFt || 
-        !weightUnitBtnKg || !weightUnitBtnLbs || !calculateBtn) {
-      console.error('AI Calculator elements not found');
-      return;
+      activeUser = await authDB.updateUser(activeUser.id, awards);
     }
-    
-    // Load saved unit preferences
-    aiCalculatorState.heightUnit = await settingsDB.get('heightUnit') || 'cm';
-    aiCalculatorState.weightUnit = await settingsDB.get('weightUnit') || 'kg';
-    
-    function updateHeightUnitDisplay() {
-      if (aiCalculatorState.heightUnit === 'cm') {
-        heightCmContainer.style.display = 'block';
-        heightFtContainer.style.display = 'none';
-        heightUnitBtn.classList.add('active');
-        heightUnitBtnFt.classList.remove('active');
-        heightUnitBtn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-        heightUnitBtn.style.color = 'white';
-        heightUnitBtnFt.style.background = '';
-        heightUnitBtnFt.style.color = '';
-      } else {
-        heightCmContainer.style.display = 'none';
-        heightFtContainer.style.display = 'block';
-        heightUnitBtnFt.classList.add('active');
-        heightUnitBtn.classList.remove('active');
-        heightUnitBtnFt.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-        heightUnitBtnFt.style.color = 'white';
-        heightUnitBtn.style.background = '';
-        heightUnitBtn.style.color = '';
-      }
-    }
-    
-    function updateWeightUnitDisplay() {
-      const weightInput = document.getElementById('weight');
-      if (!weightInput) return;
-      
-      if (aiCalculatorState.weightUnit === 'kg') {
-        weightInput.placeholder = 'kg';
-        weightUnitBtnKg.classList.add('active');
-        weightUnitBtnLbs.classList.remove('active');
-        weightUnitBtnKg.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-        weightUnitBtnKg.style.color = 'white';
-        weightUnitBtnLbs.style.background = '';
-        weightUnitBtnLbs.style.color = '';
-      } else {
-        weightInput.placeholder = 'lbs';
-        weightUnitBtnLbs.classList.add('active');
-        weightUnitBtnKg.classList.remove('active');
-        weightUnitBtnLbs.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-        weightUnitBtnLbs.style.color = 'white';
-        weightUnitBtnKg.style.background = '';
-        weightUnitBtnKg.style.color = '';
-      }
-    }
-    
-    // Initialize unit displays
-    updateHeightUnitDisplay();
-    updateWeightUnitDisplay();
-    
-    // Height unit toggle handlers
-    heightUnitBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Convert existing value if any
-      const heightFeetEl = document.getElementById('heightFeet');
-      const heightInchesEl = document.getElementById('heightInches');
-      if (heightFeetEl && heightInchesEl) {
-        const heightFeet = heightFeetEl.value;
-        const heightInches = heightInchesEl.value;
-        if (heightFeet || heightInches) {
-          const cmValue = convertHeightToCm(parseFloat(heightFeet || 0), parseFloat(heightInches || 0));
-          const heightEl = document.getElementById('height');
-          if (heightEl) heightEl.value = Math.round(cmValue);
-        }
-      }
-      
-      aiCalculatorState.heightUnit = 'cm';
-      await settingsDB.set('heightUnit', 'cm');
-      updateHeightUnitDisplay();
-    });
-    
-    heightUnitBtnFt.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Convert existing value if any
-      const heightEl = document.getElementById('height');
-      if (heightEl && heightEl.value) {
-        const { feet, inches } = convertCmToFeetInches(parseFloat(heightEl.value));
-        const heightFeetEl = document.getElementById('heightFeet');
-        const heightInchesEl = document.getElementById('heightInches');
-        if (heightFeetEl) heightFeetEl.value = feet;
-        if (heightInchesEl) heightInchesEl.value = inches;
-      }
-      
-      aiCalculatorState.heightUnit = 'ft';
-      await settingsDB.set('heightUnit', 'ft');
-      updateHeightUnitDisplay();
-    });
-    
-    // Weight unit toggle handlers
-    weightUnitBtnKg.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Convert existing value if any
-      const weightEl = document.getElementById('weight');
-      if (weightEl && weightEl.value && aiCalculatorState.weightUnit === 'lbs') {
-        const kgValue = convertLbsToKg(parseFloat(weightEl.value));
-        weightEl.value = Math.round(kgValue * 10) / 10;
-      }
-      
-      aiCalculatorState.weightUnit = 'kg';
-      await settingsDB.set('weightUnit', 'kg');
-      updateWeightUnitDisplay();
-    });
-    
-    weightUnitBtnLbs.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Convert existing value if any
-      const weightEl = document.getElementById('weight');
-      if (weightEl && weightEl.value && aiCalculatorState.weightUnit === 'kg') {
-        const lbsValue = convertKgToLbs(parseFloat(weightEl.value));
-        weightEl.value = Math.round(lbsValue * 10) / 10;
-      }
-      
-      aiCalculatorState.weightUnit = 'lbs';
-      await settingsDB.set('weightUnit', 'lbs');
-      updateWeightUnitDisplay();
-    });
-    
-    // AI Calculator calculate button
-    calculateBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      try {
-        // Get values and convert to metric for calculations
-        let height, weight;
-        
-        if (aiCalculatorState.heightUnit === 'cm') {
-          const heightEl = document.getElementById('height');
-          height = heightEl ? parseFloat(heightEl.value) : null;
-        } else {
-          const heightFeetEl = document.getElementById('heightFeet');
-          const heightInchesEl = document.getElementById('heightInches');
-          const feet = heightFeetEl ? parseFloat(heightFeetEl.value || 0) : 0;
-          const inches = heightInchesEl ? parseFloat(heightInchesEl.value || 0) : 0;
-          height = convertHeightToCm(feet, inches);
-        }
-        
-        if (aiCalculatorState.weightUnit === 'kg') {
-          const weightEl = document.getElementById('weight');
-          weight = weightEl ? parseFloat(weightEl.value) : null;
-        } else {
-          const weightEl = document.getElementById('weight');
-          const lbs = weightEl ? parseFloat(weightEl.value) : null;
-          weight = lbs ? convertLbsToKg(lbs) : null;
-        }
-        
-        const genderEl = document.getElementById('gender');
-        const ageEl = document.getElementById('age');
-        const waistEl = document.getElementById('waist');
-        const neckEl = document.getElementById('neck');
-        
-        const data = {
-          gender: genderEl ? genderEl.value : '',
-          age: ageEl ? parseInt(ageEl.value) : null,
-          height: height,
-          weight: weight,
-          waist: waistEl ? parseFloat(waistEl.value) : null,
-          neck: neckEl ? parseFloat(neckEl.value) : null
-        };
-        
-        if (!data.age || !data.height || !data.weight || !data.waist || !data.neck) {
-          alert('Please fill in all fields');
-          return;
-        }
-        
-        if (!window.aiCalculator || !window.aiCalculator.calculate) {
-          alert('AI Calculator not loaded. Please refresh the page.');
-          console.error('aiCalculator not available');
-          return;
-        }
-        
-        const results = window.aiCalculator.calculate(data);
-        const resultsDiv = document.getElementById('aiResults');
-        
-        if (!resultsDiv) {
-          alert('Results container not found');
-          return;
-        }
-        
-        resultsDiv.innerHTML = `
-          <h3>Your Results</h3>
-          <div class="result-item">
-            <div class="result-label">Body Fat Percentage</div>
-            <div class="result-value">${results.bodyFat ? results.bodyFat.toFixed(1) : 'N/A'}%</div>
-            ${results.category ? `<div style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.25rem;">Category: ${results.category}</div>` : ''}
-          </div>
-          <div class="result-item">
-            <div class="result-label">BMI (Body Mass Index)</div>
-            <div class="result-value">${results.bmi || 'N/A'}</div>
-          </div>
-          <div class="result-item">
-            <div class="result-label">BMR (Basal Metabolic Rate)</div>
-            <div class="result-value">${results.bmr || 'N/A'} kcal/day</div>
-          </div>
-          <div class="result-item">
-            <div class="result-label">TDEE (Total Daily Energy Expenditure)</div>
-            <div class="result-value">${results.tdee || 'N/A'} kcal/day</div>
-          </div>
-        `;
-        
-        resultsDiv.classList.add('show');
-      } catch (error) {
-        console.error('Error calculating:', error);
-        alert('Error calculating results. Please check your inputs and try again.');
-      }
-    });
-    
-    console.log('AI Calculator initialized successfully');
-  } catch (error) {
-    console.error('Error initializing AI Calculator:', error);
-  }
-}
+    await refresh();
+  };
 
-// Start app when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApp);
-} else {
-  initApp();
-}
+  const handleVerifyIdentity = async () => {
+    if (!activeUser) return;
+    if (activeUser.identityVerified) return Notifier.toast('Already verified.', 'info');
+    activeUser = await authDB.updateUser(activeUser.id, { identityVerified: true });
+    await securityDB.log(activeUser.id, 'id-check', 'approved', 'Instant verification completed.');
+    const awards = ReputationEngine.award('SECURITY_UPGRADE', activeUser, { identityVerified: true });
+    activeUser = await authDB.updateUser(activeUser.id, awards);
+    Notifier.toast('ID verified! Trust score boosted.', 'success');
+    await refresh();
+  };
 
+  const handlePickupCode = async () => {
+    if (!activeUser) return Notifier.toast('Sign in first.', 'error');
+    const code = Logistics.createPickupCode();
+    qs('pickupCodeDisplay').textContent = `Pickup PIN: ${code}`;
+    await securityDB.log(activeUser.id, 'pickup-code', 'generated', `PIN ${code}`);
+    Notifier.toast(`Share this PIN with the buyer: ${code}`, 'info');
+  };
+
+  const handleEscrowRequest = async () => {
+    if (!activeUser) return;
+    await securityDB.log(activeUser.id, 'escrow', 'pending', 'Escrow review requested.');
+    Notifier.toast('Escrow team notified. Expect confirmation shortly.', 'info');
+    await refresh();
+  };
+
+  return { init };
+})();
+
+document.addEventListener('DOMContentLoaded', MarketplaceApp.init);
